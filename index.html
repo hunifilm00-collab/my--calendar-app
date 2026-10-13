@@ -104,6 +104,13 @@
       </div>
 
       <div class="field">
+        <label for="start-date" class="label">시작일</label>
+        <input id="start-date" class="input" type="date" aria-describedby="start-date-hint start-date-error">
+        <p id="start-date-hint" class="hint">처음에는 오늘로 정해져 있어요. 오늘보다 이전 날짜를 고르면 지난 날짜의 일은 밀린 일로 보여요.</p>
+        <p id="start-date-error" class="error" role="alert"></p>
+      </div>
+
+      <div class="field">
         <label for="final-deadline" class="label">전체 마감일</label>
         <input id="final-deadline" class="input" type="date" aria-describedby="final-deadline-error">
         <p id="final-deadline-error" class="error" role="alert"></p>

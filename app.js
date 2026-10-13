@@ -123,6 +123,7 @@
             deadline: task.deadline || "",
           };
         }),
+        startDate: old.plan.startDate || "",
         finalDeadline: (old.settings && old.settings.finalDeadline) || "",
       };
       return next;
@@ -441,7 +442,6 @@
       el("span", { class: "block-amount", text: amountText(context) }),
       context.block.edited && opts.showEdited ? el("span", { class: "tag", text: "수정됨" }) : null,
       exceeded > 0 ? el("span", { class: "tag tag-late", text: "마감 " + exceeded + "일 초과" }) : null,
-      opts.showOrigin ? el("span", { class: "block-origin", text: formatDay(context.block.date) + " 몫" }) : null,
     ]);
 
     const main = el("div", { class: "block-main" }, [
@@ -577,7 +577,7 @@
     notice.hidden = !(allDone || todayDone);
     if (allDone || todayDone) {
       notice.appendChild(svgUse("mascot", 24));
-      notice.appendChild(el("span", { text: allDone ? "모든 일을 마쳤어요" : "오늘 몫을 마쳤어요" }));
+      notice.appendChild(el("span", { text: allDone ? "모든 일을 마쳤어요" : "오늘 할 일을 마쳤어요" }));
     }
 
     renderCalendar(byId("home-calendar"), {
@@ -599,7 +599,7 @@
     });
 
     renderDayPanel(contexts, today);
-    renderOverdue(contexts, today);
+    renderOverdue(today);
     renderProjects(today);
 
     if (focusSelector) focusLater(focusSelector, byId("screen-home"));
@@ -674,48 +674,115 @@
 
   // ---------- 밀린 일 ----------
 
-  function renderOverdue(contexts, today) {
+  // 같은 일의 밀린 블록은 한 줄로 합치고, 여러 날짜면 기간으로 보여 준다.
+  // 묶음은 프로젝트와 일(task)이 같은 밀린 블록이다. 줄은 가장 이른 날짜순이다(spec 6-8)
+  function listOverdueGroups(today) {
+    const groups = [];
+    state.projects.forEach(function (project, index) {
+      S.groupOverdueByTask(project.plan.blocks, today).forEach(function (found) {
+        const task = findTask(project, found.taskId);
+        if (!task) return;
+        groups.push({
+          key: "overdue/" + project.id + "/" + found.taskId,
+          projectId: project.id,
+          projectName: project.name,
+          colorIndex: index,
+          task: task,
+          deadline: S.resolveDeadline(task, project.settings.finalDeadline, project.plan.startDate),
+          blockIds: found.blockIds,
+          count: found.blockIds.length,
+          firstDate: found.firstDate,
+          lastDate: found.lastDate,
+          // 옮기기와 분할은 묶음 전체의 분량을 한 블록처럼 다룬다
+          block: { id: found.blockIds[0], taskId: found.taskId, date: found.firstDate, amount: found.amount, done: false },
+        });
+      });
+    });
+    return groups.sort(function (a, b) { return a.firstDate < b.firstDate ? -1 : a.firstDate > b.firstDate ? 1 : 0; });
+  }
+
+  function formatPeriod(group) {
+    if (group.firstDate === group.lastDate) return formatDay(group.firstDate);
+    return formatDay(group.firstDate) + " ~ " + formatDay(group.lastDate);
+  }
+
+  function groupAmountText(group) {
+    return group.block.amount + (group.task.unit || DEFAULT_UNIT);
+  }
+
+  function renderOverdue(today) {
     const section = byId("overdue");
     clear(section);
-    const overdue = contexts
-      .filter(function (context) { return !context.block.done && S.diffDays(context.block.date, today) > 0; })
-      .sort(function (a, b) { return a.block.date < b.block.date ? -1 : a.block.date > b.block.date ? 1 : 0; });
-    section.hidden = overdue.length === 0;
-    if (!overdue.length) {
+    const groups = listOverdueGroups(today);
+    section.hidden = groups.length === 0;
+    if (!groups.length) {
       ui.overdueOpen = null;
       return;
     }
 
     section.appendChild(el("div", { class: "card-head" }, [
-      el("h3", { id: "overdue-title", tabindex: "-1", text: "밀린 일 (" + overdue.length + ")" }),
+      el("h3", { id: "overdue-title", tabindex: "-1", text: "밀린 일 (" + groups.length + ")" }),
       el("span", { class: "chip chip-white", text: "부담 갖지 마세요" }),
     ]));
     section.appendChild(el("p", { class: "lead", text: "오늘 전에 끝내지 못한 일이에요. 어떻게 할지 골라 주세요." }));
 
     const list = el("ul", { class: "block-list" });
-    overdue.forEach(function (context) {
-      const item = renderBlockRow(context, {
-        showProject: true,
-        showOrigin: true,
-        onCheck: function (done) { toggleDone(context, done, "#overdue-title"); },
-      });
-      item.appendChild(renderOverdueActions(context, today));
+    groups.forEach(function (group) {
+      const item = el("li", { class: "block-item" }, [renderOverdueRow(group)]);
+      item.appendChild(renderOverdueActions(group, today));
       list.appendChild(item);
     });
     section.appendChild(list);
   }
 
-  function renderOverdueActions(context, today) {
-    const open = ui.overdueOpen && ui.overdueOpen.key === context.key ? ui.overdueOpen : null;
-    const check = S.checkSplittable(context.block, context.deadline, today);
+  function renderOverdueRow(group) {
+    const exceeded = S.countExceededDays(group.lastDate, group.deadline);
+    const pill = el("span", { class: "pill", text: group.projectName });
+    pill.style.background = colorOf(group.colorIndex);
+    const label = group.projectName + " " + group.task.title + " " + formatPeriod(group) + " " + groupAmountText(group);
+
+    const check = el("label", { class: "check" }, [
+      el("input", {
+        type: "checkbox",
+        "aria-label": label,
+        "data-focus": "check:" + group.key,
+        onchange: function (event) { completeGroup(group, event.target.checked); },
+      }),
+      svgUse("icon-check", 14),
+    ]);
+
+    const text = el("span", { class: "block-text" }, [
+      el("span", { class: "block-title", text: group.task.title }),
+      pill,
+      el("span", { class: "block-amount", text: groupAmountText(group) }),
+      group.count > 1 ? el("span", { class: "tag", text: group.count + "일치" }) : null,
+      exceeded > 0 ? el("span", { class: "tag tag-late", text: "마감 " + exceeded + "일 초과" }) : null,
+      el("span", { class: "block-origin", text: formatPeriod(group) }),
+    ]);
+    return el("div", { class: "block-row" }, [el("div", { class: "block-main" }, [check, text])]);
+  }
+
+  // 묶음의 체크 상자를 누르면 묶음 안의 모든 블록이 완료로 바뀐다
+  function completeGroup(group, done) {
+    updateProjectBlocks(group.projectId, function (blocks) {
+      return blocks.map(function (block) {
+        return group.blockIds.indexOf(block.id) >= 0 ? Object.assign({}, block, { done: done }) : block;
+      });
+    });
+    renderHome("#overdue-title");
+  }
+
+  function renderOverdueActions(group, today) {
+    const open = ui.overdueOpen && ui.overdueOpen.key === group.key ? ui.overdueOpen : null;
+    const check = S.checkSplittable(group.block, group.deadline, today);
 
     const moveButton = el("button", {
       type: "button",
       class: "btn btn-secondary",
       text: "다른 날로 옮기기",
-      "data-focus": "move:" + context.key,
+      "data-focus": "move:" + group.key,
       onclick: function () {
-        ui.overdueOpen = { key: context.key, mode: "move", date: today };
+        ui.overdueOpen = { key: group.key, mode: "move", date: today };
         renderHome();
         focusLater("[data-overdue-first]", byId("overdue"));
       },
@@ -725,12 +792,12 @@
       class: "btn btn-secondary",
       text: "분할하기",
       disabled: !check.ok,
-      "data-focus": "split:" + context.key,
+      "data-focus": "split:" + group.key,
       onclick: function () {
         ui.overdueOpen = {
-          key: context.key,
+          key: group.key,
           mode: "split",
-          pieces: S.proposeSplit(context.block, context.deadline, today),
+          pieces: S.proposeSplit(group.block, group.deadline, today),
         };
         renderHome();
         focusLater("[data-overdue-first]", byId("overdue"));
@@ -742,21 +809,21 @@
       check.ok ? null : el("p", { class: "reason", text: check.reason }),
     ]);
 
-    if (open && open.mode === "move") wrapper.appendChild(renderMovePanel(context, today));
-    if (open && open.mode === "split" && open.pieces) wrapper.appendChild(renderSplitPanel(context, open));
+    if (open && open.mode === "move") wrapper.appendChild(renderMovePanel(group, today));
+    if (open && open.mode === "split" && open.pieces) wrapper.appendChild(renderSplitPanel(group, open));
     return wrapper;
   }
 
-  function closeOverdue(context, focusKind) {
+  function closeOverdue(group, focusKind) {
     ui.overdueOpen = null;
-    renderHome("[data-focus='" + focusKind + ":" + context.key + "']");
+    renderHome("[data-focus='" + focusKind + ":" + group.key + "']");
     if (!document.activeElement || document.activeElement === document.body) {
       focusLater("#overdue-title", byId("screen-home"));
       focusLater("#day-panel-title", byId("screen-home"));
     }
   }
 
-  function renderMovePanel(context, today) {
+  function renderMovePanel(group, today) {
     const input = el("input", {
       class: "input",
       type: "date",
@@ -776,8 +843,8 @@
           error.textContent = "오늘 이후의 날짜를 골라 주세요";
           return;
         }
-        updateProjectBlocks(context.projectId, function (blocks) {
-          return S.moveBlock(blocks, context.block.id, date, true);
+        updateProjectBlocks(group.projectId, function (blocks) {
+          return S.moveBlocks(blocks, group.blockIds, date, true);
         });
         ui.selected = date;
         const parts = splitDate(date);
@@ -790,7 +857,7 @@
       type: "button",
       class: "btn btn-secondary",
       text: "취소",
-      onclick: function () { closeOverdue(context, "move"); },
+      onclick: function () { closeOverdue(group, "move"); },
     });
     return el("div", { class: "panel" }, [
       el("div", { class: "panel-row" }, [el("label", { for: "move-date", text: "옮길 날짜" }), input]),
@@ -799,15 +866,15 @@
     ]);
   }
 
-  function renderSplitPanel(context, open) {
-    const unit = context.task.unit || DEFAULT_UNIT;
+  function renderSplitPanel(group, open) {
+    const unit = group.task.unit || DEFAULT_UNIT;
     const sum = el("p", { class: "sum", "aria-live": "polite" });
     const submit = el("button", { type: "button", class: "btn btn-primary", text: "이대로 분할하기" });
 
     function refresh() {
       const total = open.pieces.reduce(function (acc, piece) { return acc + (Number.isFinite(piece.amount) ? piece.amount : 0); }, 0);
-      const valid = S.isSplitValid(context.block, open.pieces);
-      sum.textContent = "합계 " + total + " / " + context.block.amount + unit + (valid ? "" : " (합이 같아야 분할할 수 있어요)");
+      const valid = S.isSplitValid(group.block, open.pieces);
+      sum.textContent = "합계 " + total + " / " + group.block.amount + unit + (valid ? "" : " (합이 같아야 분할할 수 있어요)");
       sum.classList.toggle("is-bad", !valid);
       submit.disabled = !valid;
     }
@@ -837,10 +904,10 @@
     });
 
     submit.addEventListener("click", function () {
-      if (!S.isSplitValid(context.block, open.pieces)) return;
-      let firstDate = open.pieces.find(function (piece) { return piece.amount > 0; });
-      updateProjectBlocks(context.projectId, function (blocks) {
-        return S.applySplit(blocks, context.block.id, open.pieces);
+      if (!S.isSplitValid(group.block, open.pieces)) return;
+      const firstDate = open.pieces.find(function (piece) { return piece.amount > 0; });
+      updateProjectBlocks(group.projectId, function (blocks) {
+        return S.applySplitMany(blocks, group.blockIds, open.pieces);
       });
       if (firstDate) {
         ui.selected = firstDate.date;
@@ -855,7 +922,7 @@
       type: "button",
       class: "btn btn-secondary",
       text: "취소",
-      onclick: function () { closeOverdue(context, "split"); },
+      onclick: function () { closeOverdue(group, "split"); },
     });
 
     refresh();
@@ -951,7 +1018,7 @@
 
   function ensureDraft() {
     if (!state.draft) {
-      state.draft = { name: "", lines: [{ title: "", amount: "", unit: "", deadline: "" }], finalDeadline: "" };
+      state.draft = { name: "", lines: [{ title: "", amount: "", unit: "", deadline: "" }], startDate: "", finalDeadline: "" };
     }
     return state.draft;
   }
@@ -972,11 +1039,37 @@
     return result;
   }
 
-  function checkFinalDeadline(value) {
+  const START_RANGE_DAYS = 365;
+
+  // 비워 두면 오늘부터 시작한다. 시작일은 오늘 기준 앞뒤 365일 안에서 고른다
+  function getStartDate(draft) {
+    return draft.startDate || getToday();
+  }
+
+  function checkStartDate(value) {
+    const today = getToday();
+    const start = value || today;
+    if (!S.isValidDate(start) || Math.abs(S.diffDays(today, start)) > START_RANGE_DAYS) {
+      return { ok: false, message: "시작일은 오늘 기준 앞뒤 365일 안의 날짜로 골라 주세요" };
+    }
+    return { ok: true, message: "" };
+  }
+
+  // 마감일은 시작일 이후이고 오늘 이후이며, 시작일부터 365일 안이어야 한다(spec 4-3의 오늘 기준을 시작일 기준으로 넓혔다)
+  function checkFinalDeadline(value, start) {
     if (!value) return { ok: false, message: "" };
     const today = getToday();
-    if (!S.isValidDate(value) || value < today || S.diffDays(today, value) > S.MAX_DEADLINE_DAYS) {
-      return { ok: false, message: "마감일은 오늘부터 365일 안의 날짜로 골라 주세요" };
+    if (!S.isValidDate(value)) {
+      return { ok: false, message: "마감일을 올바른 날짜로 골라 주세요" };
+    }
+    if (S.isValidDate(start) && value < start) {
+      return { ok: false, message: "마감일은 시작일 이후의 날짜로 골라 주세요" };
+    }
+    if (value < today) {
+      return { ok: false, message: "마감일은 오늘 이후의 날짜로 골라 주세요" };
+    }
+    if (S.isValidDate(start) && S.diffDays(start, value) > S.MAX_DEADLINE_DAYS) {
+      return { ok: false, message: "마감일은 시작일부터 365일 안의 날짜로 골라 주세요" };
     }
     return { ok: true, message: "" };
   }
@@ -985,9 +1078,11 @@
     const draft = ensureDraft();
     const today = getToday();
     byId("project-name").value = draft.name;
+    const startInput = byId("start-date");
+    startInput.min = S.addDays(today, -START_RANGE_DAYS);
+    startInput.max = S.addDays(today, START_RANGE_DAYS);
+    startInput.value = getStartDate(draft);
     const deadline = byId("final-deadline");
-    deadline.min = today;
-    deadline.max = S.addDays(today, S.MAX_DEADLINE_DAYS);
     deadline.value = draft.finalDeadline;
     ui.touched = {};
     byId("make-plan-error").textContent = "";
@@ -1094,13 +1189,26 @@
       row.querySelector('[data-field="amount"]').setAttribute("aria-invalid", showAmount ? "true" : "false");
     });
 
-    const deadline = checkFinalDeadline(draft.finalDeadline);
+    const startDate = getStartDate(draft);
+    const startCheck = checkStartDate(draft.startDate);
+    const showStartError = startCheck.message && ui.touched.start;
+    byId("start-date-error").textContent = showStartError ? startCheck.message : "";
+    byId("start-date").setAttribute("aria-invalid", showStartError ? "true" : "false");
+
+    // 마감일 선택 범위는 시작일에 따라 달라진다. 일별 마감일도 같은 범위를 쓴다
+    const today = getToday();
+    const earliest = startCheck.ok && startDate > today ? startDate : today;
+    byId("final-deadline").min = earliest;
+    if (startCheck.ok) byId("final-deadline").max = S.addDays(startDate, S.MAX_DEADLINE_DAYS);
+    document.querySelectorAll('[data-field="deadline"]').forEach(function (input) { input.min = earliest; });
+
+    const deadline = checkFinalDeadline(draft.finalDeadline, startDate);
     const deadlineInput = byId("final-deadline");
     const showDeadlineError = deadline.message && ui.touched.deadline;
     byId("final-deadline-error").textContent = showDeadlineError ? deadline.message : "";
     deadlineInput.setAttribute("aria-invalid", showDeadlineError ? "true" : "false");
 
-    const canSubmit = hasLine && !hasError && deadline.ok;
+    const canSubmit = hasLine && !hasError && startCheck.ok && deadline.ok;
     byId("make-plan").disabled = !canSubmit;
     byId("make-plan-hint").hidden = canSubmit;
   }
@@ -1159,6 +1267,17 @@
       refreshInputView();
     });
 
+    const startInput = byId("start-date");
+    startInput.addEventListener("input", function (event) {
+      state.draft.startDate = event.target.value;
+      persist();
+      refreshInputView();
+    });
+    startInput.addEventListener("blur", function () {
+      ui.touched.start = true;
+      refreshInputView();
+    });
+
     const deadline = byId("final-deadline");
     deadline.addEventListener("input", function (event) {
       state.draft.finalDeadline = event.target.value;
@@ -1177,7 +1296,6 @@
 
   function makePreview() {
     const draft = state.draft;
-    const today = getToday();
     const error = byId("make-plan-error");
     error.textContent = "";
     try {
@@ -1192,7 +1310,7 @@
           deadline: line.deadline || "",
         });
       });
-      const plan = S.buildPlan(tasks, draft.finalDeadline, today);
+      const plan = S.buildPlan(tasks, draft.finalDeadline, getStartDate(draft));
       ui.previewPlan = plan;
       ui.previewTasks = tasks;
       ui.previewFinalDeadline = draft.finalDeadline;
@@ -1202,7 +1320,8 @@
       return;
     }
     ui.previewOriginal = JSON.stringify(ui.previewPlan.blocks);
-    const parts = splitDate(today);
+    // 미리보기 달력은 일정이 시작하는 달부터 보여 준다
+    const parts = splitDate(ui.previewPlan.startDate);
     ui.previewMonth = { year: parts.year, month: parts.month };
     ui.previewSelected = null;
     ui.editingKey = null;

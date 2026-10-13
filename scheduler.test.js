@@ -221,4 +221,92 @@ check("분할 불가 문구: 마감이 지난 경우와 하루뿐인 경우가 �
   assert.ok(scheduler.checkSplittable(block, "2026-10-14", LATE_TODAY).reason.indexOf("하루뿐") >= 0);
 });
 
+// 시작일을 오늘이 아닌 날로 정하는 경우. 30쪽을 7일(10-10~10-16)에 나누면 30 = 7 x 4 + 2 이므로 5, 5, 4, 4, 4, 4, 4
+check("시작일: 10-10부터 10-16까지 7일에 5, 5, 4, 4, 4, 4, 4로 나뉘어요", function () {
+  const plan = scheduler.buildPlan([{ id: "t1", amount: 30 }], "2026-10-16", "2026-10-10");
+  assert.strictEqual(plan.startDate, "2026-10-10");
+  assert.deepStrictEqual(summarize(plan.blocks), ["10-10:5", "10-11:5", "10-12:4", "10-13:4", "10-14:4", "10-15:4", "10-16:4"]);
+  assert.strictEqual(sumAmount(plan.blocks), 30);
+});
+
+check("시작일: 오늘이 10-13이면 10-10~10-12 몫 3개가 밀린 일이에요", function () {
+  const plan = scheduler.buildPlan([{ id: "t1", amount: 30 }], "2026-10-16", "2026-10-10");
+  const overdue = scheduler.findOverdueBlocks(plan.blocks, "2026-10-13");
+  assert.deepStrictEqual(summarize(overdue), ["10-10:5", "10-11:5", "10-12:4"]);
+});
+
+check("시작일: 미래의 시작일은 그날부터 나눠요", function () {
+  const plan = scheduler.buildPlan([{ id: "t1", amount: 4 }], "2026-10-20", "2026-10-19");
+  assert.deepStrictEqual(summarize(plan.blocks), ["10-19:2", "10-20:2"]);
+});
+
+check("시작일: 일별 마감일이 시작일보다 앞이면 전체 마감일을 써요", function () {
+  assert.strictEqual(scheduler.resolveDeadline({ deadline: "2026-10-12" }, "2026-10-16", "2026-10-14"), "2026-10-16");
+  assert.strictEqual(scheduler.resolveDeadline({ deadline: "2026-10-15" }, "2026-10-16", "2026-10-14"), "2026-10-15");
+});
+
+// 묶음 사례: 30쪽(10-10 시작, 10-16 마감)에서 오늘이 10-13이면 10-10:5, 10-11:5, 10-12:4가 밀렸다
+function makeLatePlan() {
+  return scheduler.buildPlan([{ id: "t1", amount: 30 }, { id: "t2", amount: 7 }], "2026-10-16", "2026-10-10");
+}
+
+check("묶음: 같은 일의 밀린 블록은 한 묶음이고 분량은 합쳐 14쪽, 기간은 10-10~10-12예요", function () {
+  const plan = makeLatePlan();
+  const groups = scheduler.groupOverdueByTask(plan.blocks, "2026-10-13");
+  assert.strictEqual(groups.length, 2); // t1과 t2 두 일
+  const t1 = groups.find(function (group) { return group.taskId === "t1"; });
+  assert.strictEqual(t1.amount, 14);
+  assert.strictEqual(t1.firstDate, "2026-10-10");
+  assert.strictEqual(t1.lastDate, "2026-10-12");
+  assert.strictEqual(t1.blockIds.length, 3);
+  const t2 = groups.find(function (group) { return group.taskId === "t2"; });
+  assert.strictEqual(t2.amount, 3); // 7 = 7 x 1 이므로 매일 1회, 3일치
+});
+
+check("묶음: 하루만 밀리면 기간이 한 날짜예요. 완료한 블록은 묶음에서 빠져요", function () {
+  const plan = makeLatePlan();
+  const marked = plan.blocks.map(function (block) {
+    return block.taskId === "t1" && block.date !== "2026-10-12" ? Object.assign({}, block, { done: true }) : block;
+  });
+  const t1 = scheduler.groupOverdueByTask(marked, "2026-10-13").find(function (group) { return group.taskId === "t1"; });
+  assert.strictEqual(t1.amount, 4);
+  assert.strictEqual(t1.firstDate, t1.lastDate);
+  assert.strictEqual(t1.blockIds.length, 1);
+});
+
+check("묶음: 밀린 일이 없으면 묶음도 없어요", function () {
+  const plan = makeLatePlan();
+  assert.deepStrictEqual(scheduler.groupOverdueByTask(plan.blocks, "2026-10-10"), []);
+});
+
+check("묶음 옮기기: 14쪽이 10-15의 기존 4쪽과 합쳐 18쪽 한 블록이 되고 전체는 30쪽이에요", function () {
+  const plan = scheduler.buildPlan([{ id: "t1", amount: 30 }], "2026-10-16", "2026-10-10");
+  const group = scheduler.groupOverdueByTask(plan.blocks, "2026-10-13")[0];
+  const moved = scheduler.moveBlocks(plan.blocks, group.blockIds, "2026-10-15", true);
+  assert.deepStrictEqual(summarize(moved), ["10-13:4", "10-14:4", "10-15:18", "10-16:4"]);
+  assert.strictEqual(sumAmount(moved), 30);
+  assert.strictEqual(moved.find(function (block) { return block.date === "2026-10-15"; }).edited, true);
+});
+
+check("묶음 분할: 14쪽을 13~16일 4일에 4, 4, 3, 3으로 나눠 기존 4쪽과 합치면 8, 8, 7, 7이에요", function () {
+  const plan = scheduler.buildPlan([{ id: "t1", amount: 30 }], "2026-10-16", "2026-10-10");
+  const group = scheduler.groupOverdueByTask(plan.blocks, "2026-10-13")[0];
+  const proposal = scheduler.proposeSplit({ amount: group.amount }, "2026-10-16", "2026-10-13");
+  assert.deepStrictEqual(proposal, [
+    { date: "2026-10-13", amount: 4 }, { date: "2026-10-14", amount: 4 },
+    { date: "2026-10-15", amount: 3 }, { date: "2026-10-16", amount: 3 },
+  ]);
+  const result = scheduler.applySplitMany(plan.blocks, group.blockIds, proposal);
+  assert.deepStrictEqual(summarize(result), ["10-13:8", "10-14:8", "10-15:7", "10-16:7"]);
+  assert.strictEqual(sumAmount(result), 30);
+  assert.strictEqual(scheduler.findOverdueBlocks(result, "2026-10-13").length, 0);
+});
+
+check("묶음 분할: 합이 묶음 전체(14)와 다르면 확정되지 않아요", function () {
+  const plan = scheduler.buildPlan([{ id: "t1", amount: 30 }], "2026-10-16", "2026-10-10");
+  const group = scheduler.groupOverdueByTask(plan.blocks, "2026-10-13")[0];
+  const pieces = [{ date: "2026-10-13", amount: 7 }, { date: "2026-10-14", amount: 6 }];
+  assert.strictEqual(scheduler.applySplitMany(plan.blocks, group.blockIds, pieces), plan.blocks);
+});
+
 process.exit(failed ? 1 : 0);

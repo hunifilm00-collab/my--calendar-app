@@ -176,6 +176,13 @@
     return placeAmount(rest, block.taskId, newDate, block.amount, markEdited);
   }
 
+  // 같은 일의 밀린 블록 여러 개를 한 날짜로 옮긴다. 옮긴 날에 같은 일의 미완료 블록이 있으면 모두 합쳐진다
+  function moveBlocks(blocks, blockIds, newDate, markEdited) {
+    return blockIds.reduce(function (result, blockId) {
+      return moveBlock(result, blockId, newDate, markEdited);
+    }, blocks);
+  }
+
   // spec 5-3: 분량을 고치면 일의 전체 분량도 같은 만큼 바뀐다. 분량은 1 이상의 정수다.
   function changeBlockAmount(blocks, blockId, newAmount, markEdited) {
     if (!Number.isInteger(newAmount) || newAmount < 1) return blocks;
@@ -196,6 +203,24 @@
   function findOverdueBlocks(blocks, today) {
     return blocks.filter(function (block) {
       return !block.done && diffDays(block.date, today) > 0;
+    });
+  }
+
+  // 밀린 블록을 일(taskId)별로 묶는다. 분량은 합치고 날짜는 가장 이른 날과 가장 늦은 날로 줄인다.
+  // 묶음은 가장 이른 날짜순이다(spec 6-8의 '오래된 날짜순')
+  function groupOverdueByTask(blocks, today) {
+    const groups = {};
+    findOverdueBlocks(blocks, today).forEach(function (block) {
+      const group = groups[block.taskId] || (groups[block.taskId] = {
+        taskId: block.taskId, blockIds: [], amount: 0, firstDate: block.date, lastDate: block.date,
+      });
+      group.blockIds.push(block.id);
+      group.amount += block.amount;
+      if (block.date < group.firstDate) group.firstDate = block.date;
+      if (block.date > group.lastDate) group.lastDate = block.date;
+    });
+    return Object.keys(groups).map(function (taskId) { return groups[taskId]; }).sort(function (a, b) {
+      return a.firstDate < b.firstDate ? -1 : a.firstDate > b.firstDate ? 1 : 0;
     });
   }
 
@@ -243,13 +268,22 @@
   }
 
   // spec 5-6: 원래 블록을 빼고 조각을 날짜에 놓는다. 0은 그날을 건너뛴다.
-  function applySplit(blocks, blockId, pieces) {
-    const block = findBlock(blocks, blockId);
-    if (!block || !isSplitValid(block, pieces)) return blocks;
+  // 같은 일의 밀린 블록 여러 개를 묶어 한 번에 분할할 수 있고, 이때 분량의 합은 묶음 전체의 합과 같아야 한다
+  function applySplitMany(blocks, blockIds, pieces) {
+    const targets = blockIds.map(function (id) { return findBlock(blocks, id); });
+    if (targets.some(function (block) { return !block || block.done; })) return blocks;
+    const total = targets.reduce(function (sum, block) { return sum + block.amount; }, 0);
+    if (!isSplitValid({ amount: total }, pieces)) return blocks;
+    const taskId = targets[0].taskId;
+    const rest = blockIds.reduce(removeBlock, blocks);
     return pieces.reduce(function (result, piece) {
       if (piece.amount === 0) return result;
-      return placeAmount(result, block.taskId, piece.date, piece.amount, true);
-    }, removeBlock(blocks, blockId));
+      return placeAmount(result, taskId, piece.date, piece.amount, true);
+    }, rest);
+  }
+
+  function applySplit(blocks, blockId, pieces) {
+    return applySplitMany(blocks, [blockId], pieces);
   }
 
   const api = {
@@ -267,15 +301,18 @@
     countExceededDays: countExceededDays,
     buildPlan: buildPlan,
     moveBlock: moveBlock,
+    moveBlocks: moveBlocks,
     changeBlockAmount: changeBlockAmount,
     findTodayBlocks: findTodayBlocks,
     findOverdueBlocks: findOverdueBlocks,
+    groupOverdueByTask: groupOverdueByTask,
     isTodayDone: isTodayDone,
     isAllDone: isAllDone,
     checkSplittable: checkSplittable,
     proposeSplit: proposeSplit,
     isSplitValid: isSplitValid,
     applySplit: applySplit,
+    applySplitMany: applySplitMany,
   };
 
   // 브라우저와 노드 테스트에서 같은 파일을 쓰려고 두 방식으로 내보낸다
