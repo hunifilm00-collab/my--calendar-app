@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>작심삼일</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23ff6b35'/%3E%3Ccircle cx='8.5' cy='10' r='1.6' fill='%231f2430'/%3E%3Ccircle cx='15.5' cy='10' r='1.6' fill='%231f2430'/%3E%3Cpath d='M8 14.5c1.2 2 6.8 2 8 0' stroke='%231f2430' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 로고와 칸이 그림은 화면 읽기 도구가 읽지 않게 하고 뜻은 글자로 전한다(spec 서비스 화면에 적용) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="mascot" viewBox="0 0 24 24">
+      <rect width="24" height="24" rx="6" fill="#ff6b35"/>
+      <circle cx="8.5" cy="10" r="1.6" fill="#1f2430"/>
+      <circle cx="15.5" cy="10" r="1.6" fill="#1f2430"/>
+      <path d="M8 14.5c1.2 2 6.8 2 8 0" stroke="#1f2430" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="cell-done" viewBox="0 0 24 24">
+      <rect width="24" height="24" rx="6" fill="#1f2430"/>
+      <path d="M6.5 12.5l3.8 3.8 7.2-8" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="cell-empty" viewBox="0 0 24 24">
+      <rect x="1" y="1" width="22" height="22" rx="6" fill="none" stroke="#1f2430" stroke-width="1.6" stroke-dasharray="3 3"/>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 14 10">
+      <path d="M1.5 5.2l3.7 3.6 7.3-7.6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 12 12">
+      <path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 8 12">
+      <path d="M6.5 1.5L2 6l4.5 4.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 8 12">
+      <path d="M1.5 1.5L6 6l-4.5 4.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-calendar" viewBox="0 0 16 16">
+      <rect x="1.5" y="3" width="13" height="11.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M1.5 6.5h13M5 1.5v3M11 1.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-split" viewBox="0 0 14 14">
+      <path d="M7 1v5M7 6L2.5 12M7 6l4.5 6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+  </svg>
+
+  <header class="topbar">
+    <svg class="logo" viewBox="0 0 128 24" width="128" height="24" aria-hidden="true" focusable="false">
+      <use href="#cell-done" x="0" y="0" width="24" height="24"/>
+      <use href="#cell-done" x="26" y="0" width="24" height="24"/>
+      <use href="#cell-done" x="52" y="0" width="24" height="24"/>
+      <use href="#cell-empty" x="78" y="0" width="24" height="24"/>
+      <use href="#mascot" x="104" y="0" width="24" height="24"/>
+    </svg>
+    <span class="service-name">작심삼일</span>
+  </header>
+
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+  <main>
+    <!-- 세 화면 중 하나만 보인다(spec 6-1). 어떤 화면에서 열어도 홈이 먼저다(spec 6-2) -->
+    <section id="screen-home" data-screen="home">
+      <div class="head-row">
+        <h2 tabindex="-1">내 일정</h2>
+        <button type="button" id="add-project" class="btn btn-primary">
+          <svg class="icon" width="11" height="11" aria-hidden="true"><use href="#icon-plus"/></svg>
+          <span id="add-project-label">프로젝트 추가</span>
+        </button>
+      </div>
+      <p id="project-limit" class="hint" hidden>프로젝트는 10개까지 만들 수 있어요</p>
+
+      <div class="banner">
+        <svg width="20" height="20" aria-hidden="true"><use href="#mascot"/></svg>
+        <span>삼 일 만에 무너져도, 다시 짜면 돼요</span>
+      </div>
+
+      <div id="done-notice" class="done-notice" hidden></div>
+      <div id="home-calendar"></div>
+      <section id="day-panel" class="card day-card" aria-labelledby="day-panel-title"></section>
+      <section id="overdue" class="card overdue-card" hidden aria-labelledby="overdue-title"></section>
+      <section id="project-list" class="projects" hidden aria-labelledby="projects-title"></section>
+      <p id="backup-status" class="hint backup-status" role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <section id="screen-input" data-screen="input" hidden>
+      <div class="head-row">
+        <h2 tabindex="-1">할 일과 마감일을 적어 주세요</h2>
+        <a href="#" data-go="home" class="link">홈으로</a>
+      </div>
+      <p class="sub">마감까지 날짜별로 나눠 드려요</p>
+
+      <div class="field">
+        <label for="project-name" class="label">프로젝트 이름</label>
+        <input id="project-name" class="input" type="text" maxlength="20" placeholder="예: 시험 대비" autocomplete="off">
+      </div>
+
+      <div class="field">
+        <p id="lines-label" class="label">해야 할 일을 적어 주세요</p>
+        <p class="sub">일 하나마다 한 줄이에요. 이름과 분량(쪽, 회 등)을 적어요.</p>
+        <div id="lines" role="group" aria-labelledby="lines-label"></div>
+        <button type="button" id="add-line" class="btn btn-secondary">+ 목록 추가</button>
+        <p id="lines-limit" class="hint" hidden>일은 50개까지 넣을 수 있어요</p>
+        <p id="lines-announce" class="sr-only" aria-live="polite"></p>
+      </div>
+
+      <div class="field">
+        <label for="final-deadline" class="label">전체 마감일</label>
+        <input id="final-deadline" class="input" type="date" aria-describedby="final-deadline-error">
+        <p id="final-deadline-error" class="error" role="alert"></p>
+      </div>
+
+      <p id="save-note" class="sub">입력한 내용은 이 기기의 브라우저에만 저장돼요. 서버로 보내지 않아요.</p>
+      <button type="button" id="make-plan" class="btn btn-primary btn-block" disabled>일정 나눠 보기</button>
+      <p id="make-plan-hint" class="hint">일과 전체 마감일을 적으면 누를 수 있어요</p>
+      <p id="make-plan-error" class="error" role="alert"></p>
+    </section>
+
+    <section id="screen-preview" data-screen="preview" hidden>
+      <h2 tabindex="-1">이렇게 진행하면 될까요?</h2>
+      <p id="preview-desc" class="sub"></p>
+      <div id="preview-calendar"></div>
+      <p id="preview-day-note" class="hint" role="status" aria-live="polite"></p>
+      <div id="preview-list"></div>
+      <div class="actions">
+        <button type="button" id="confirm-plan" class="btn btn-primary btn-block">이대로 확정</button>
+        <div class="link-row">
+          <a href="#" id="back-to-input" class="link">입력 수정</a>
+          <a href="#" data-go="home" class="link">홈으로</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="dialog" class="dialog" aria-labelledby="dialog-message">
+    <p id="dialog-message"></p>
+    <div class="dialog-actions">
+      <button type="button" id="dialog-ok" class="btn btn-primary"></button>
+      <button type="button" id="dialog-cancel" class="btn btn-secondary">취소</button>
+    </div>
+  </dialog>
+
+  <script src="scheduler.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
